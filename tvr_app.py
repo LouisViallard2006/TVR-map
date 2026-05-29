@@ -130,14 +130,13 @@ LONS = np.arange(-178, 179, STEP, dtype=float)
 def build_cache():
     cache = {}
     for (sc,hz),(w,s) in PARAMS.items():
-        # grille (nlat, nlon, 5)
-        grid = np.full((len(LATS), len(LONS), 5), np.nan)
-        for i,lat in enumerate(LATS):
-            for j,lon in enumerate(LONS):
+        rows = []
+        for lat in LATS:
+            for lon in LONS:
                 r = tvr(float(lat), float(lon), w, s)
                 if r:
-                    grid[i,j] = r
-        cache[f"{sc}_{hz}"] = grid
+                    rows.append([lat, lon] + r)
+        cache[f"{sc}_{hz}"] = np.array(rows)
     return cache
 
 # ── INTERFACE ────────────────────────────────────────────────────────
@@ -168,42 +167,45 @@ with c3:
                "D3 — Submersion","D4 — Air & Sols","D5 — Écosystème"].index(dim_name)
 
 cache = build_cache()
-grid = cache[f"{sc}_{hz}"]  # shape (nlat, nlon, 5)
+arr = cache[f"{sc}_{hz}"]
+# arr colonnes : lat, lon, d1, d2, d3, d4, d5
+lats = arr[:,0]
+lons = arr[:,1]
+dims = arr[:,2:]  # shape (n, 5)
 
-# Score à afficher
 if dim_idx == 0:
-    data = np.nanmean(grid, axis=2)
+    scores = dims.mean(axis=1)
 else:
-    data = grid[:,:,dim_idx-1]
+    scores = dims[:,dim_idx-1]
 
-# Masque terres
-land = np.array([[is_land(float(lat),float(lon))
-                  for lon in LONS] for lat in LATS])
-data_plot = np.where(land, data, np.nan)
-
-# ── CARTE ────────────────────────────────────────────────────────────
+# ── CARTE SCATTER ────────────────────────────────────────────────────
 fig, ax = plt.subplots(figsize=(16,8), facecolor="#0D1B2A")
 ax.set_facecolor("#0D1B2A")
 
-# pcolormesh avec coordonnées des bords de cellules
-lon_edges = np.append(LONS - STEP/2, LONS[-1] + STEP/2)
-lat_edges = np.append(LATS - STEP/2, LATS[-1] + STEP/2)
-LON_E, LAT_E = np.meshgrid(lon_edges, lat_edges)
-
-ax.pcolormesh(LON_E, LAT_E, data_plot,
+sc_plot = ax.scatter(
+    lons, lats,
+    c=scores,
     cmap=CMAP, vmin=0, vmax=100,
-    shading='flat', zorder=2, alpha=0.93)
+    s=120,           # taille des points — grands pour couvrir sans pixel
+    marker='s',      # carré mais lissé par la taille et l'alpha
+    alpha=0.85,
+    linewidths=0,
+    zorder=2
+)
 
-ax.set_xlim(-180,180); ax.set_ylim(-90,90)
-ax.set_aspect('equal'); ax.axis('off')
+ax.set_xlim(-180,180)
+ax.set_ylim(-90,90)
+ax.set_aspect('equal')
+ax.axis('off')
 
-fig.text(0.5,0.97, f"TVR — {dim_name} · {sc} · {hz}",
+fig.text(0.5, 0.97, f"TVR — {dim_name} · {sc} · {hz}",
     ha='center', color='white', fontsize=13, fontweight='bold')
-fig.text(0.5,0.02,
+fig.text(0.5, 0.01,
     "Sources : IPCC AR6 · WRI Aqueduct 4.0 · NASA Sea Level Tool  |  "
-    "Le TVR note le sol, pas les États — aucune frontière politique",
+    "Le TVR note le sol, pas les États",
     ha='center', color='#555', fontsize=8)
 
+# Légende
 for k,(g,r,c2,l) in enumerate([
     ("A+","85–100","#1B4332","Exceptionnel"),
     ("A", "70–84", "#2D6A4F","Haute capacité"),
@@ -223,3 +225,9 @@ for k,(g,r,c2,l) in enumerate([
 
 plt.tight_layout(rect=[0,0.03,1,0.95])
 st.pyplot(fig, use_container_width=True)
+
+st.markdown("""
+<p style='color:#444;font-size:10px;text-align:center'>
+Modèle basé sur IPCC AR6/CMIP6 · WRI Aqueduct 4.0 · NASA Sea Level Tool ·
+Aucune frontière politique — le TVR note le sol
+</p>""", unsafe_allow_html=True)
