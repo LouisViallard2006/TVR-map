@@ -1,6 +1,5 @@
 # TVR — Territorial Viability Rating
 # Louis Viallard — Université Lumière Lyon 2 — 2026
-# Lancer : streamlit run tvr_app.py
 
 import math
 import numpy as np
@@ -11,7 +10,6 @@ import streamlit as st
 
 st.set_page_config(page_title="TVR — Territorial Viability Rating", layout="wide")
 
-# ── MODÈLE ──────────────────────────────────────────────────────────
 def clamp(v): return max(0, min(100, int(v)))
 def noise(lat, lon, s=1): return math.sin(lat*0.3+s)*math.cos(lon*0.2+s*1.7)*5
 
@@ -32,8 +30,6 @@ def is_land(lat, lon):
 def tvr(lat, lon, w=1.8, s=1.2):
     if not is_land(lat, lon): return None
     a = abs(lat)
-
-    # D1 Thermique
     if a>70: d1=75-w*2
     elif a>60: d1=82-w*3
     elif a>50: d1=78-w*4
@@ -55,8 +51,6 @@ def tvr(lat, lon, w=1.8, s=1.2):
     if 22<lat<28 and 98<lon<106: d1+=20
     if 10<lat<18 and -18<lon<40: d1-=15
     d1=clamp(d1+noise(lat,lon,1))
-
-    # D2 Eau
     if a>65: d2=80
     elif a>55: d2=82
     elif a>45: d2=74
@@ -74,8 +68,6 @@ def tvr(lat, lon, w=1.8, s=1.2):
     if 15<lat<28 and 68<lon<88: d2-=18+w*5
     if 35<lat<44 and -5<lon<36: d2-=10+w*6
     d2=clamp(d2-w*3+noise(lat,lon,2))
-
-    # D3 Submersion
     d3=88
     if 21<lat<24 and 88<lon<92: d3=max(5,8-s*8)
     if 51<lat<53 and 3<lon<7: d3=max(5,28-s*10)
@@ -87,8 +79,6 @@ def tvr(lat, lon, w=1.8, s=1.2):
     if 60<lat<70 and 14<lon<30: d3=94
     if 22<lat<28 and 98<lon<106: d3=93
     d3=clamp(max(0,d3)+noise(lat,lon,3))
-
-    # D4 Air & Sols
     if a>65: d4=55
     elif a>55: d4=72
     elif a>45: d4=70
@@ -104,8 +94,6 @@ def tvr(lat, lon, w=1.8, s=1.2):
     if 22<lat<28 and 98<lon<106: d4+=12
     if 58<lat<70 and 14<lon<32: d4+=10
     d4=clamp(d4-w*2+noise(lat,lon,4))
-
-    # D5 Écosystème
     if a>70: d5=65
     elif a>60: d5=80
     elif a>50: d5=72
@@ -121,114 +109,117 @@ def tvr(lat, lon, w=1.8, s=1.2):
     if 10<lat<18 and -18<lon<40: d5-=25
     if 35<lat<42 and 108<lon<125: d5-=18
     d5=clamp(d5-w*4+noise(lat,lon,5))
-
-    mean=(d1+d2+d3+d4+d5)//5
-    return [mean,d1,d2,d3,d4,d5]
+    return [d1,d2,d3,d4,d5]
 
 PARAMS = {
-    ("SSP1","2040"):(0.5,0.3), ("SSP1","2070"):(1.0,0.6), ("SSP1","2100"):(1.5,1.0),
-    ("SSP2","2040"):(0.8,0.5), ("SSP2","2070"):(1.8,1.2), ("SSP2","2100"):(2.7,2.0),
-    ("SSP5","2040"):(1.2,0.8), ("SSP5","2070"):(3.0,2.0), ("SSP5","2100"):(4.4,3.5),
+    ("SSP1","2040"):(0.5,0.3),("SSP1","2070"):(1.0,0.6),("SSP1","2100"):(1.5,1.0),
+    ("SSP2","2040"):(0.8,0.5),("SSP2","2070"):(1.8,1.2),("SSP2","2100"):(2.7,2.0),
+    ("SSP5","2040"):(1.2,0.8),("SSP5","2070"):(3.0,2.0),("SSP5","2100"):(4.4,3.5),
 }
-
-DIMS = ["Moyen","D1 Thermique","D2 Eau","D3 Submersion","D4 Air & Sols","D5 Écosystème"]
 
 CMAP = LinearSegmentedColormap.from_list("TVR",[
     (0.00,"#9B2226"),(0.25,"#E76F51"),(0.40,"#F4A261"),
-    (0.55,"#F4D03F"),(0.65,"#95D5B2"),(0.70,"#52B788"),
+    (0.55,"#F4D03F"),(0.65,"#95D5B2"),(0.75,"#52B788"),
     (0.85,"#2D6A4F"),(1.00,"#1B4332")],N=256)
 
 STEP = 2
-LATS = list(range(-88,89,STEP))
-LONS = list(range(-178,179,STEP))
+LATS = np.arange(-88, 89, STEP, dtype=float)
+LONS = np.arange(-178, 179, STEP, dtype=float)
 
-@st.cache_data(show_spinner="Calcul de la grille mondiale...")
+@st.cache_data(show_spinner="Calcul de la grille mondiale (~2 min)...")
 def build_cache():
     cache = {}
     for (sc,hz),(w,s) in PARAMS.items():
-        key = f"{sc}_{hz}"
-        grid = np.full((len(LATS),len(LONS),6), np.nan)
+        # grille (nlat, nlon, 5)
+        grid = np.full((len(LATS), len(LONS), 5), np.nan)
         for i,lat in enumerate(LATS):
             for j,lon in enumerate(LONS):
-                r = tvr(lat,lon,w,s)
-                if r: grid[i,j] = r
-        cache[key] = grid
+                r = tvr(float(lat), float(lon), w, s)
+                if r:
+                    grid[i,j] = r
+        cache[f"{sc}_{hz}"] = grid
     return cache
 
-# ── INTERFACE ───────────────────────────────────────────────────────
+# ── INTERFACE ────────────────────────────────────────────────────────
 st.markdown("""
-<div style='background:#0D1B2A;padding:14px 20px;border-radius:8px;
-border-left:4px solid #2D6A4F;margin-bottom:16px'>
-<h2 style='color:white;margin:0;font-size:20px'>
+<div style='background:#0D1B2A;padding:12px 18px;border-radius:8px;
+border-left:4px solid #2D6A4F;margin-bottom:14px'>
+<h2 style='color:white;margin:0;font-size:18px'>
 TERRITORIAL VIABILITY RATING (TVR)</h2>
-<p style='color:#95D5B2;margin:4px 0 0;font-size:12px'>
+<p style='color:#95D5B2;margin:3px 0 0;font-size:11px'>
 Indice de performance écologique territoriale ·
 Louis Viallard · Université Lumière Lyon 2 · 2026</p>
 </div>""", unsafe_allow_html=True)
 
-col1,col2,col3 = st.columns(3)
-with col1:
-    sc = st.selectbox("Scénario",["SSP1 — Optimiste (+2°C)",
-        "SSP2 — Intermédiaire (+2.7°C)","SSP5 — Pessimiste (+4.4°C)"],index=1)
-    sc_key = sc[:4]
-with col2:
+c1,c2,c3 = st.columns(3)
+with c1:
+    sc_full = st.selectbox("Scénario",[
+        "SSP1 — Optimiste (+2°C)",
+        "SSP2 — Intermédiaire (+2.7°C)",
+        "SSP5 — Pessimiste (+4.4°C)"],index=1)
+    sc = sc_full[:4]
+with c2:
     hz = st.selectbox("Horizon",["2040","2070","2100"],index=1)
-with col3:
-    dim_label = st.selectbox("Dimension", DIMS)
-    dim_idx = DIMS.index(dim_label)
+with c3:
+    dim_name = st.selectbox("Dimension",[
+        "Score moyen","D1 — Thermique","D2 — Eau",
+        "D3 — Submersion","D4 — Air & Sols","D5 — Écosystème"])
+    dim_idx = ["Score moyen","D1 — Thermique","D2 — Eau",
+               "D3 — Submersion","D4 — Air & Sols","D5 — Écosystème"].index(dim_name)
 
 cache = build_cache()
-grid = cache[f"{sc_key}_{hz}"]
-data = grid[:,:,dim_idx]
+grid = cache[f"{sc}_{hz}"]  # shape (nlat, nlon, 5)
+
+# Score à afficher
+if dim_idx == 0:
+    data = np.nanmean(grid, axis=2)
+else:
+    data = grid[:,:,dim_idx-1]
 
 # Masque terres
-land_mask = np.array([[is_land(lat,lon) for lon in LONS] for lat in LATS])
-data_plot = np.where(land_mask & ~np.isnan(data), data, np.nan)
+land = np.array([[is_land(float(lat),float(lon))
+                  for lon in LONS] for lat in LATS])
+data_plot = np.where(land, data, np.nan)
 
-# Carte
-fig,ax = plt.subplots(figsize=(16,8),facecolor="#0D1B2A")
+# ── CARTE ────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(16,8), facecolor="#0D1B2A")
 ax.set_facecolor("#0D1B2A")
-for i,lat in enumerate(LATS):
-    for j,lon in enumerate(LONS):
-        if is_land(lat,lon) and np.isnan(data_plot[i,j]):
-            ax.add_patch(mpatches.Rectangle(
-                (lon-STEP/2,lat-STEP/2),STEP,STEP,
-                color="#1a1a2e",zorder=1,linewidth=0))
 
-LON_G,LAT_G = np.meshgrid(np.array(LONS),np.array(LATS))
-ax.pcolormesh(LON_G-STEP/2,LAT_G-STEP/2,data_plot,
-    cmap=CMAP,vmin=0,vmax=100,shading='flat',zorder=2,alpha=0.93)
+# pcolormesh avec coordonnées des bords de cellules
+lon_edges = np.append(LONS - STEP/2, LONS[-1] + STEP/2)
+lat_edges = np.append(LATS - STEP/2, LATS[-1] + STEP/2)
+LON_E, LAT_E = np.meshgrid(lon_edges, lat_edges)
+
+ax.pcolormesh(LON_E, LAT_E, data_plot,
+    cmap=CMAP, vmin=0, vmax=100,
+    shading='flat', zorder=2, alpha=0.93)
+
 ax.set_xlim(-180,180); ax.set_ylim(-90,90)
 ax.set_aspect('equal'); ax.axis('off')
 
-fig.text(0.5,0.97,f"TVR — {dim_label} · {sc[:4]} · {hz}",
-    ha='center',color='white',fontsize=13,fontweight='bold')
+fig.text(0.5,0.97, f"TVR — {dim_name} · {sc} · {hz}",
+    ha='center', color='white', fontsize=13, fontweight='bold')
 fig.text(0.5,0.02,
-    "Sources : IPCC AR6 · WRI Aqueduct 4.0 · NASA Sea Level Tool",
-    ha='center',color='#444',fontsize=8)
+    "Sources : IPCC AR6 · WRI Aqueduct 4.0 · NASA Sea Level Tool  |  "
+    "Le TVR note le sol, pas les États — aucune frontière politique",
+    ha='center', color='#555', fontsize=8)
 
-# Légende
-for k,(g,r,c,l) in enumerate([
+for k,(g,r,c2,l) in enumerate([
     ("A+","85–100","#1B4332","Exceptionnel"),
     ("A", "70–84", "#2D6A4F","Haute capacité"),
     ("B", "55–69", "#95D5B2","Modéré"),
     ("C", "40–54", "#F4A261","Dégradé"),
     ("D", "25–39", "#E76F51","Sévère"),
     ("E", "0–24",  "#9B2226","Non-viable")]):
-    y=0.82-k*0.07
+    y = 0.82 - k*0.07
     fig.add_artist(mpatches.FancyBboxPatch(
-        (0.01,y-0.015),0.016,0.03,
-        boxstyle="round,pad=0.002",facecolor=c,edgecolor='none',
-        transform=fig.transFigure,zorder=10))
-    fig.text(0.03,y,f"{g}  {r}  {l}",
-        transform=fig.transFigure,color='white',fontsize=7.5,va='center')
+        (0.01, y-0.015), 0.016, 0.03,
+        boxstyle="round,pad=0.002",
+        facecolor=c2, edgecolor='none',
+        transform=fig.transFigure, zorder=10))
+    fig.text(0.03, y, f"{g}  {r}  {l}",
+        transform=fig.transFigure,
+        color='white', fontsize=7.5, va='center')
 
 plt.tight_layout(rect=[0,0.03,1,0.95])
-st.pyplot(fig,use_container_width=True)
-
-# Légende texte
-st.markdown("""
-<p style='color:#666;font-size:11px;text-align:center;margin-top:8px'>
-Modèle basé sur IPCC AR6 / CMIP6 · WRI Aqueduct 4.0 · NASA Sea Level Projection Tool
-· La carte note le sol, pas les États · Aucune frontière politique
-</p>""", unsafe_allow_html=True)
+st.pyplot(fig, use_container_width=True)
