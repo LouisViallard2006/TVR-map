@@ -2,33 +2,35 @@
 # Louis Viallard — Université Lumière Lyon 2 — 2026
 
 import math
+import json
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.colors import LinearSegmentedColormap
+from shapely.geometry import Point, shape
+from shapely.ops import unary_union
 import streamlit as st
+import urllib.request
 
 st.set_page_config(page_title="TVR — Territorial Viability Rating", layout="wide")
 
+# ── MASQUE TERRES (Natural Earth) ───────────────────────────────────
+@st.cache_resource(show_spinner="Chargement des terres...")
+def load_land():
+    url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson"
+    with urllib.request.urlopen(url) as r:
+        gj = json.loads(r.read())
+    shapes = [shape(f["geometry"]) for f in gj["features"]]
+    return unary_union(shapes)
+
+def is_land(lat, lon, land_union):
+    return land_union.contains(Point(lon, lat))
+
+# ── MODÈLE TVR ──────────────────────────────────────────────────────
 def clamp(v): return max(0, min(100, int(v)))
 def noise(lat, lon, s=1): return math.sin(lat*0.3+s)*math.cos(lon*0.2+s*1.7)*5
 
-def is_land(lat, lon):
-    if -60<lat<72 and -70<lon<-15:
-        if -10<lat<15 and -20<lon<-5: return True
-        return False
-    if lon<-100 and lat<60:
-        if 7<lat<20 and -92<lon<-77: return True
-        if -55<lat<-17 and -82<lon<-68: return True
-        return False
-    if lon>155 and lat<15: return False
-    if lon>165 and lat<50: return False
-    if -60<lat<0 and 55<lon<90: return False
-    if 8<lat<22 and 58<lon<65: return False
-    return True
-
 def tvr(lat, lon, w=1.8, s=1.2):
-    if not is_land(lat, lon): return None
     a = abs(lat)
     if a>70: d1=75-w*2
     elif a>60: d1=82-w*3
@@ -127,14 +129,14 @@ LATS = np.arange(-88, 89, STEP, dtype=float)
 LONS = np.arange(-178, 179, STEP, dtype=float)
 
 @st.cache_data(show_spinner="Calcul de la grille mondiale (~2 min)...")
-def build_cache():
+def build_cache(_land):
     cache = {}
     for (sc,hz),(w,s) in PARAMS.items():
         rows = []
         for lat in LATS:
             for lon in LONS:
-                r = tvr(float(lat), float(lon), w, s)
-                if r:
+                if is_land(float(lat), float(lon), _land):
+                    r = tvr(float(lat), float(lon), w, s)
                     rows.append([lat, lon] + r)
         cache[f"{sc}_{hz}"] = np.array(rows)
     return cache
@@ -166,46 +168,57 @@ with c3:
     dim_idx = ["Score moyen","D1 — Thermique","D2 — Eau",
                "D3 — Submersion","D4 — Air & Sols","D5 — Écosystème"].index(dim_name)
 
-cache = build_cache()
+land = load_land()
+cache = build_cache(land)
 arr = cache[f"{sc}_{hz}"]
-# arr colonnes : lat, lon, d1, d2, d3, d4, d5
 lats = arr[:,0]
 lons = arr[:,1]
-dims = arr[:,2:]  # shape (n, 5)
+dims = arr[:,2:]
 
-if dim_idx == 0:
-    scores = dims.mean(axis=1)
-else:
-    scores = dims[:,dim_idx-1]
+scores = dims.mean(axis=1) if dim_idx==0 else dims[:,dim_idx-1]
 
-# ── CARTE SCATTER ────────────────────────────────────────────────────
+# ── CARTE ────────────────────────────────────────────────────────────
 fig, ax = plt.subplots(figsize=(16,8), facecolor="#0D1B2A")
 ax.set_facecolor("#0D1B2A")
 
-sc_plot = ax.scatter(
-    lons, lats,
-    c=scores,
-    cmap=CMAP, vmin=0, vmax=100,
-    s=120,           # taille des points — grands pour couvrir sans pixel
-    marker='s',      # carré mais lissé par la taille et l'alpha
-    alpha=0.85,
-    linewidths=0,
-    zorder=2
-)
+# Fond terres (contours Natural Earth)
+from shapely.geometry import mapping
+import matplotlib.patches as PathPatch
+from matplotlib.patches import PathPatch as MPP
+from matplotlib.path import Path
+
+def plot_polygon(ax, poly, color):
+    from matplotlib.patches import Polygon as MPolygon
+    if poly.geom_type == 'Polygon':
+        coords = np.array(poly.exterior.coords)
+        ax.add_patch(MPolygon(coords, closed=True,
+            facecolor=color, edgecolor='none', zorder=1))
+    elif poly.geom_type == 'MultiPolygon':
+        for p in poly.geoms:
+            coords = np.array(p.exterior.coords)
+            ax.add_patch(MPolygon(coords, closed=True,
+                facecolor=color, edgecolor='none', zorder=1))
+
+plot_polygon(ax, land, "#1a1a2e")
+
+# Points TVR
+ax.scatter(lons, lats,
+    c=scores, cmap=CMAP, vmin=0, vmax=100,
+    s=60, marker='o',
+    alpha=0.88, linewidths=0, zorder=2)
 
 ax.set_xlim(-180,180)
 ax.set_ylim(-90,90)
 ax.set_aspect('equal')
 ax.axis('off')
 
-fig.text(0.5, 0.97, f"TVR — {dim_name} · {sc} · {hz}",
+fig.text(0.5,0.97, f"TVR — {dim_name} · {sc} · {hz}",
     ha='center', color='white', fontsize=13, fontweight='bold')
-fig.text(0.5, 0.01,
+fig.text(0.5,0.01,
     "Sources : IPCC AR6 · WRI Aqueduct 4.0 · NASA Sea Level Tool  |  "
-    "Le TVR note le sol, pas les États",
+    "Le TVR note le sol, pas les États — aucune frontière politique",
     ha='center', color='#555', fontsize=8)
 
-# Légende
 for k,(g,r,c2,l) in enumerate([
     ("A+","85–100","#1B4332","Exceptionnel"),
     ("A", "70–84", "#2D6A4F","Haute capacité"),
@@ -213,21 +226,15 @@ for k,(g,r,c2,l) in enumerate([
     ("C", "40–54", "#F4A261","Dégradé"),
     ("D", "25–39", "#E76F51","Sévère"),
     ("E", "0–24",  "#9B2226","Non-viable")]):
-    y = 0.82 - k*0.07
+    y = 0.82-k*0.07
     fig.add_artist(mpatches.FancyBboxPatch(
-        (0.01, y-0.015), 0.016, 0.03,
+        (0.01,y-0.015),0.016,0.03,
         boxstyle="round,pad=0.002",
-        facecolor=c2, edgecolor='none',
-        transform=fig.transFigure, zorder=10))
-    fig.text(0.03, y, f"{g}  {r}  {l}",
+        facecolor=c2,edgecolor='none',
+        transform=fig.transFigure,zorder=10))
+    fig.text(0.03,y,f"{g}  {r}  {l}",
         transform=fig.transFigure,
-        color='white', fontsize=7.5, va='center')
+        color='white',fontsize=7.5,va='center')
 
 plt.tight_layout(rect=[0,0.03,1,0.95])
 st.pyplot(fig, use_container_width=True)
-
-st.markdown("""
-<p style='color:#444;font-size:10px;text-align:center'>
-Modèle basé sur IPCC AR6/CMIP6 · WRI Aqueduct 4.0 · NASA Sea Level Tool ·
-Aucune frontière politique — le TVR note le sol
-</p>""", unsafe_allow_html=True)
